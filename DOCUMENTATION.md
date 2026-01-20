@@ -248,7 +248,7 @@ def redirect(location, permanent=False):
 ### ✅ Semaine 1 : Fondations (7 jours)
 
 #### Jour 1-2 : Structure et parsing HTTP
-- [ ] Créer la structure de dossiers du projet
+- [ok] Créer la structure de dossiers du projet
 - [ ] Implémenter `http_parser.py` :
   - [ ] Parser une requête HTTP complète
   - [ ] Parser les headers
