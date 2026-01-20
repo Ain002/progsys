@@ -25,3 +25,4 @@ def get_mime_type(filename):
     """
     # TODO: Implémenter la détection
     pass
+  
