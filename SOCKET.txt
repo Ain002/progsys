@@ -1,0 +1,45 @@
+SOCKET!!
+
+sock = socket.socket(socket.AF_INET,
+- UPD: socket.SOCK_DGRAM
+- TCP: socket.SOCK_STREAM
+)
+
+curl http://localhost:4608
+curl -X POST http://127.0.0.1:4608/api -d "nom=John&age=30"
+curl -X GET http://127.0.0.1:4608/hello
+
+
+# Serveur Echo
+Client A <---> [Serveur Echo]
+Client B <---> [Serveur Echo]
+
+# Proxy
+Client A --> [Proxy] --> Serveur Cible
+Client B --> [Proxy] --> Serveur Cible
+
+
+ Pour connecter plusieur client on peut utilise:
+ select/selector: 
+ thread: chaque client a son serviteur
+ asyncio: sync/await
+bref a revoir ty alo ka
+
+
+
+
+
+
+
+
+while true; do
+  nc -u -l -w 1 172.16.0.35 9999
+done
+
+socat -u UDP4-RECV:9999,bind=172.16.0.35,reuseaddr -
+
+# exec socat -u -T 5 TCP4-LISTEN:"${PORT}",bind="${BIND_IP}",reuseaddr,fork -
+# exec socat TCP4-LISTEN:"${PORT}",fork,reuseaddr TCP4:TCP4:"${BIND_IP}":"${PORT}"
+# socat TCP4-LISTEN:"4005",fork,reuseaddr TCP4:TCP4:"172.16.0.10":"4005"
+
+socat -u -T 5 TCP4-LISTEN:"${PORT}",bind="${BIND_IP}",reuseaddr,fork -
