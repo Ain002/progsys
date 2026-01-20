@@ -5,7 +5,7 @@ import types
 
 sel = selectors.DefaultSelector()
 
-host = "127.0.0.1"
+host = "127.0.0.1" 
 port = 4610
 
 lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
