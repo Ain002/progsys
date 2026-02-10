@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import time
 from typing import Tuple, Dict, Optional
 from urllib.parse import urlparse
 
@@ -17,6 +18,8 @@ from utils.http_parser import parse_http_request, build_http_response
 from handlers.static import handle_static_file
 from handlers.php_cgi import execute_php_cgi
 from handlers.redirect import get_redirect_location, build_redirect_response
+from handlers.monitoring import monitor, generate_monitoring_dashboard
+from handlers.monitoring_widget import inject_monitoring_widget
 
 # Configuration globale
 CONFIG = {}
@@ -49,7 +52,6 @@ def load_config(config_path: str = "config.json") -> Dict:
         print(f"Erreur chargement config: {e}")
         sys.exit(1)
 
-# ...existing code...
 def resolve_path(path: str, document_root: str) -> str:
     # Éviter les chemins avec .. ou absolus (sauf racine)
     if '..' in path:
@@ -67,7 +69,6 @@ def resolve_path(path: str, document_root: str) -> str:
         return ''
 
     return full_path
-# ...existing code...
 
 async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     """
@@ -78,7 +79,14 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         writer: StreamWriter pour envoyer la réponse
     """
     addr = writer.get_extra_info('peername')
+    client_ip = addr[0] if addr else 'unknown'
     print(f"Connexion de {addr}")
+    
+    # Timer pour mesurer la latence
+    start_time = time.time()
+    status_code = 200
+    method = 'UNKNOWN'
+    path = '/'
 
     try:
         # Lire la requête complète jusqu'aux headers
@@ -92,13 +100,14 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 response = build_http_response(400, "Bad Request")
                 writer.write(response)
                 await writer.drain()
+                status_code = 400
+                monitor.record_request(method, path, status_code, time.time() - start_time, client_ip)
                 return
 
         if not data:
             return
 
         # Parser la requête
-# ...existing code...
         try:
             method, path, version, headers, body = parse_http_request(data)
             print(f"Requête: {method} {path}")
@@ -106,20 +115,68 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             print(f"Requête malformée: {e}")
             print(f"Données brutes: {data[:500]}")  # Log les premiers 500 octets
             response = build_http_response(400, "Bad Request")
-# ...existing code...
+            writer.write(response)
+            await writer.drain()
+            status_code = 400
+            monitor.record_request(method, path, status_code, time.time() - start_time, client_ip)
+            return
 
         # Parser l'URL
         parsed_url = urlparse(path)
         path_only = parsed_url.path
         query_string = parsed_url.query
+        
+        # Endpoint spécial pour le monitoring
+        if path_only == '/_monitor' or path_only == '/_monitoring':
+            # Mettre à jour les stats du cache
+            from handlers.static import file_cache
+            monitor.update_cache_stats(file_cache.get_stats())
+            
+            # Générer le dashboard
+            stats = monitor.get_stats()
+            html_content = generate_monitoring_dashboard(stats)
+            
+            status_line = "HTTP/1.1 200 OK\r\n"
+            headers_str = "Content-Type: text/html; charset=utf-8\r\n"
+            headers_str += f"Content-Length: {len(html_content)}\r\n"
+            headers_str += "Connection: close\r\n\r\n"
+            response = (status_line + headers_str).encode() + html_content
+            
+            writer.write(response)
+            await writer.drain()
+            status_code = 200
+            monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
+            return
+        
+        # API JSON pour le widget
+        if path_only == '/_monitor/api':
+            from handlers.cache import cache
+            monitor.update_cache_stats(cache.get_stats())
+            
+            stats = monitor.get_stats()
+            json_content = json.dumps(stats).encode('utf-8')
+            
+            status_line = "HTTP/1.1 200 OK\r\n"
+            headers_str = "Content-Type: application/json\r\n"
+            headers_str += f"Content-Length: {len(json_content)}\r\n"
+            headers_str += "Connection: close\r\n\r\n"
+            response = (status_line + headers_str).encode() + json_content
+            
+            writer.write(response)
+            await writer.drain()
+            status_code = 200
+            monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
+            return
 
         # Vérifier les redirections
         redirect_info = get_redirect_location(path_only, CONFIG.get('redirects', {}))
         if redirect_info:
             location, permanent = redirect_info
             response = build_redirect_response(location, permanent)
+            status_code = 301 if permanent else 302
             writer.write(response)
             await writer.drain()
+            monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
             return
 
         # Résoudre le chemin du fichier
@@ -130,6 +187,8 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             response = build_http_response(400, "Bad Request")
             writer.write(response)
             await writer.drain()
+            status_code = 400
+            monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
             return
 
         # Vérifier si c'est un répertoire
@@ -146,15 +205,23 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             if found_index:
                 file_path = found_index
             else:
-                # Générer listing répertoire (simple)
-                files = os.listdir(file_path)
-                html = f"<html><body><h1>Directory: {path_only}</h1><ul>"
-                for f in files:
-                    html += f'<li><a href="{path_only}/{f}">{f}</a></li>'
-                html += "</ul></body></html>"
-                response = build_http_response(200, html, "text/html")
+                # Générer listing répertoire (joli)
+                from handlers.directory_listing import generate_directory_listing
+                html_content = generate_directory_listing(file_path, path_only, CONFIG['document_root'])
+                
+                # Injecter le widget
+                html_content = inject_monitoring_widget(html_content)
+                
+                status_line = "HTTP/1.1 200 OK\r\n"
+                headers_str = "Content-Type: text/html; charset=utf-8\r\n"
+                headers_str += f"Content-Length: {len(html_content)}\r\n"
+                headers_str += "Connection: close\r\n\r\n"
+                response = (status_line + headers_str).encode() + html_content
+                
                 writer.write(response)
                 await writer.drain()
+                status_code = 200
+                monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
                 return
 
         # Vérifier si le fichier existe
@@ -162,6 +229,8 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             response = build_http_response(404, "Not Found")
             writer.write(response)
             await writer.drain()
+            status_code = 404
+            monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
             return
 
         # Traiter selon le type de fichier
@@ -180,6 +249,11 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                     if 'content-type' in extra_headers:
                         content_type = extra_headers['content-type']
                     response_headers.update(extra_headers)
+                
+                # Injecter le widget si HTML
+                if 'text/html' in content_type:
+                    content = inject_monitoring_widget(content)
+                    response_headers.update(extra_headers)
 
                 # PHP retourne des bytes
                 status_line = "HTTP/1.1 200 OK\r\n"
@@ -193,6 +267,7 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 response = (status_line + headers_str).encode() + content
             else:
                 response = build_http_response(500, "Internal Server Error")
+                status_code = 500
 
         else:
             # Fichier statique
@@ -203,15 +278,22 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             if content is None:
                 # 404
                 response = build_http_response(404, "Not Found")
+                status_code = 404
             elif not content:
                 # 304 Not Modified
                 response = build_http_response(304, "", extra_headers=extra_headers)
+                status_code = 304
             else:
                 # Contenu avec headers de cache - gérer binaire vs texte
                 if isinstance(content, bytes):
+                    # Injecter le widget si c'est du HTML
+                    content_type = extra_headers.get('Content-Type', 'application/octet-stream')
+                    if 'text/html' in content_type:
+                        content = inject_monitoring_widget(content)
+                    
                     # Fichier binaire - construire réponse manuellement
                     status_line = "HTTP/1.1 200 OK\r\n"
-                    headers_str = f"Content-Type: {extra_headers.get('Content-Type', 'application/octet-stream')}\r\n"
+                    headers_str = f"Content-Type: {content_type}\r\n"
                     headers_str += f"Content-Length: {len(content)}\r\n"
                     if 'ETag' in extra_headers:
                         headers_str += f"ETag: {extra_headers['ETag']}\r\n"
@@ -219,20 +301,28 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                         headers_str += f"Cache-Control: {extra_headers['Cache-Control']}\r\n"
                     headers_str += "Connection: close\r\n\r\n"
                     response = (status_line + headers_str).encode() + content
+                    status_code = 200
                 else:
                     # Contenu texte
                     response = build_http_response(200, content, extra_headers=extra_headers)
+                    status_code = 200
 
         # Envoyer la réponse
         writer.write(response)
         await writer.drain()
+        
+        # Enregistrer la requête dans le monitoring
+        latency = time.time() - start_time
+        monitor.record_request(method, path_only, status_code, latency, client_ip)
 
     except Exception as e:
         print(f"Erreur traitement requête: {e}")
+        status_code = 500
         try:
             response = build_http_response(500, "Internal Server Error")
             writer.write(response)
             await writer.drain()
+            monitor.record_request(method, path, status_code, time.time() - start_time, client_ip)
         except:
             pass
     finally:

@@ -22,6 +22,8 @@ class LRUCache:
         """
         self.cache = OrderedDict()
         self.capacity = capacity
+        self.hits = 0
+        self.misses = 0
 
     def get(self, key: str) -> Optional[Any]:
         """
@@ -36,7 +38,11 @@ class LRUCache:
         if key in self.cache:
             # Déplacer à la fin (plus récemment utilisé)
             self.cache.move_to_end(key)
+            self.hits += 1
+            print(f"✅ CACHE HIT: {key}")
             return self.cache[key]
+        self.misses += 1
+        print(f"❌ CACHE MISS: {key}")
         return None
 
     def put(self, key: str, value: Any) -> None:
@@ -50,11 +56,14 @@ class LRUCache:
         if key in self.cache:
             # Déplacer à la fin
             self.cache.move_to_end(key)
+            print(f"🔄 CACHE UPDATE: {key}")
         else:
             # Nouveau élément
             if len(self.cache) >= self.capacity:
                 # Évincer le moins récemment utilisé
-                self.cache.popitem(last=False)
+                evicted = self.cache.popitem(last=False)
+                print(f"🗑️  CACHE EVICTION: {evicted[0]} (capacité atteinte)")
+            print(f"💾 CACHE ADD: {key} (taille: {len(self.cache) + 1}/{self.capacity})")
 
         self.cache[key] = value
 
@@ -74,6 +83,15 @@ class LRUCache:
     def size(self) -> int:
         """Retourne le nombre d'éléments dans le cache."""
         return len(self.cache)
+    
+    def get_stats(self):
+        """Retourne les statistiques du cache."""
+        return {
+            'hits': self.hits,
+            'misses': self.misses,
+            'size': len(self.cache),
+            'capacity': self.capacity
+        }
 
 def generate_etag(content: bytes) -> str:
     """

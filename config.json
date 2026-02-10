@@ -1,8 +1,9 @@
 {
-  "host": "127.0.0.1",
+  "host": "0.0.0.0",
   "port": 4610,
   "document_root": "./www",
-  "index_files": ["index.html", "index.php"],
+  "index_files": [],
+  "enable_directory_listing": true,
   "enable_php": true,
   "php_cgi_path": "/usr/bin/php-cgi",
   "cache_enabled": true,
