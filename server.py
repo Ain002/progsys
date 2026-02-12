@@ -271,8 +271,8 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         # Endpoint spécial pour le monitoring
         if path_only == '/_monitor' or path_only == '/_monitoring':
             # Mettre à jour les stats du cache
-            from handlers.static import file_cache
-            monitor.update_cache_stats(file_cache.get_stats())
+            from handlers.cache import cache
+            monitor.update_cache_stats(cache.get_stats())
             
             # Générer le dashboard
             stats = monitor.get_stats()
