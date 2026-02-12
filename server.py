@@ -154,6 +154,7 @@ import time
 from typing import Tuple, Dict, Optional
 from urllib.parse import urlparse
 
+
 # Importer les modules du projet
 from utils.http_parser import parse_http_request, build_http_response
 from handlers.static import handle_static_file
