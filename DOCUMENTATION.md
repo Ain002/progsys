@@ -351,7 +351,7 @@ def redirect(location, permanent=False):
 - [ ] Tester avec un script PHP qui génère une erreur
 
 ---
-
+ 
 ### ✅ Semaine 3 : Cache et optimisations (7 jours)
 
 #### Jour 15-16 : Cache mémoire LRU
