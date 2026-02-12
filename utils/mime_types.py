@@ -26,7 +26,7 @@ MIME_TYPES = {
 
 def get_mime_type(filename: str) -> str:
     """
-    Retourne le type MIME basé sur l'extension du fichier
+    Retourne le type MIME basé sur l'extension du fichier.
     
     Args:
         filename: Le nom du fichier ou son chemin
@@ -34,21 +34,9 @@ def get_mime_type(filename: str) -> str:
     Returns:
         str: Le type MIME correspondant ou 'application/octet-stream' par défaut
     """
-    import os
-    
     # Extraire l'extension du fichier
     _, ext = os.path.splitext(filename.lower())
     
     # Retourner le type MIME correspondant ou par défaut
-    return MIME_TYPES.get(ext, 'application/octet-stream')
-    Retourne le type MIME basé sur l'extension du fichier.
-
-    Args:
-        filename: Nom du fichier
-
-    Returns:
-        str: Type MIME, 'application/octet-stream' par défaut
-    """
-    _, ext = os.path.splitext(filename.lower())
     return MIME_TYPES.get(ext, 'application/octet-stream')
   
