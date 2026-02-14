@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """
-Serveur HTTP avec support PHP
-Point d'entrée principal du serveur
-Gère les requêtes HTTP, le cache, les réponses avec ETags et la compression gzip
+Serveur HTTP asynchrone avec support PHP et MySQL
+- Gestion des fichiers statiques avec cache LRU
+- Exécution PHP-CGI pour fichiers .php
+- API REST pour requêtes SQL (/api/sql)
+- Dashboard de monitoring (/_monitor)
+- Support des redirections et sessions PHP
 """
 
 import asyncio
 import hashlib
 import gzip
-import gzip
 
-# Importer le cache LRU pour la gestion du cache de fichiers statiques
 from handlers.cache import LRUCache
 
-# TODO: Implémenter le serveur asyncio avec support complet HTTP/1.1
-
 # Cache global pour les fichiers statiques
-# Capacité limitée à 200 fichiers pour éviter une consommation mémoire excessive
 static_cache = LRUCache(capacity=200)
 
 
@@ -222,7 +220,6 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     """
     addr = writer.get_extra_info('peername')
     client_ip = addr[0] if addr else 'unknown'
-    print(f"Connexion de {addr}")
     
     # Timer pour mesurer la latence
     start_time = time.time()
@@ -249,19 +246,47 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         if not data:
             return
 
-        # Parser la requête
-        try:
-            method, path, version, headers, body = parse_http_request(data)
-            print(f"Requête: {method} {path}")
-        except ValueError as e:
-            print(f"Requête malformée: {e}")
-            print(f"Données brutes: {data[:500]}")  # Log les premiers 500 octets
+        # Séparer headers et body (le body peut être déjà dans data après \r\n\r\n)
+        header_end = data.find(b'\r\n\r\n')
+        if header_end == -1:
+            # Pas de fin de headers trouvée
             response = build_http_response(400, "Bad Request")
             writer.write(response)
             await writer.drain()
             status_code = 400
             monitor.record_request(method, path, status_code, time.time() - start_time, client_ip)
             return
+            
+        headers_part = data[:header_end + 4]  # Inclut le \r\n\r\n pour le parser
+        body_already_read = data[header_end + 4:]  # Body déjà lu
+        
+        # Parser la requête (headers seulement)
+        try:
+            method, path, version, headers, _ = parse_http_request(headers_part)
+            print(f"→ {method} {path}")
+        except ValueError as e:
+            print(f"Erreur: Requête malformée - {e}")
+            response = build_http_response(400, "Bad Request")
+            writer.write(response)
+            await writer.drain()
+            status_code = 400
+            monitor.record_request(method, path, status_code, time.time() - start_time, client_ip)
+            return
+        
+        # Lire le body si Content-Length est présent (POST, PUT, etc.)
+        body = body_already_read
+        content_length = headers.get('content-length')
+        if content_length:
+            try:
+                content_length = int(content_length)
+                # Lire le reste du body si nécessaire
+                while len(body) < content_length:
+                    chunk = await reader.read(min(4096, content_length - len(body)))
+                    if not chunk:
+                        break
+                    body += chunk
+            except ValueError:
+                pass
 
         # Parser l'URL
         parsed_url = urlparse(path)
@@ -309,6 +334,37 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             status_code = 200
             monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
             return
+        
+        # API SQL - Exécuter des requêtes SQL
+        if path_only == '/api/sql':
+            from handlers.api_sql import handle_api_sql
+            try:
+                status_code, response_body, content_type = await handle_api_sql(method, path_only, body, query_string)
+                
+                status_line = f"HTTP/1.1 {status_code} OK\r\n"
+                headers_str = f"Content-Type: {content_type}\r\n"
+                headers_str += f"Content-Length: {len(response_body)}\r\n"
+                headers_str += "Connection: close\r\n\r\n"
+                response = (status_line + headers_str).encode() + response_body
+                
+                writer.write(response)
+                await writer.drain()
+                monitor.record_request(method, path_only, status_code, time.time() - start_time, client_ip)
+                return
+            except Exception as e:
+                print(f"Erreur API SQL: {e}")
+                response = build_http_response(500, f"Erreur: {e}")
+                writer.write(response)
+                await writer.drain()
+                monitor.record_request(method, path_only, 500, time.time() - start_time, client_ip)
+                return
+            except Exception as e:
+                print(f"Erreur API SQL: {e}")
+                response = build_http_response(500, f"Erreur: {e}")
+                writer.write(response)
+                await writer.drain()
+                monitor.record_request(method, path_only, 500, time.time() - start_time, client_ip)
+                return
 
         # Vérifier les redirections
         redirect_info = get_redirect_location(path_only, CONFIG.get('redirects', {}))
@@ -382,9 +438,27 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 file_path, method, query_string, headers, body,
                 CONFIG.get('php_cgi_path', '/usr/bin/php-cgi')
             )
-
-            if content:
-                # Utiliser les headers de PHP si présents
+            
+            # Vérifier si c'est une redirection (content peut être vide pour une redirection)
+            if extra_headers and 'location' in extra_headers:
+                # PHP veut rediriger
+                location = extra_headers['location']
+                
+                # Utiliser 303 See Other après POST, 302 Found sinon
+                status_code = 303 if method == "POST" else 302
+                status_text = "See Other" if method == "POST" else "Found"
+                
+                status_line = f"HTTP/1.1 {status_code} {status_text}\r\n"
+                headers_str = f"Location: {location}\r\n"
+                headers_str += "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+                headers_str += "Pragma: no-cache\r\n"
+                headers_str += "Expires: 0\r\n"
+                headers_str += "Connection: close\r\n"
+                headers_str += "Content-Length: 0\r\n\r\n"
+                response = (status_line + headers_str).encode()
+                print(f"← {status_code} {status_text} → {location}")
+            elif content:
+                # Réponse normale
                 content_type = "text/html"
                 response_headers = {}
                 if extra_headers:
@@ -395,7 +469,6 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 # Injecter le widget si HTML
                 if 'text/html' in content_type:
                     content = inject_monitoring_widget(content)
-                    response_headers.update(extra_headers)
 
                 # PHP retourne des bytes
                 status_line = "HTTP/1.1 200 OK\r\n"
@@ -403,7 +476,7 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 headers_str += f"Content-Length: {len(content)}\r\n"
                 headers_str += "Connection: close\r\n"
                 for key, value in response_headers.items():
-                    if key.lower() not in ['content-type', 'content-length', 'connection']:
+                    if key.lower() not in ['content-type', 'content-length', 'connection', 'location']:
                         headers_str += f"{key}: {value}\r\n"
                 headers_str += "\r\n"
                 response = (status_line + headers_str).encode() + content
@@ -479,9 +552,17 @@ async def main():
     host = CONFIG['host']
     port = CONFIG['port']
 
-    print(f"Démarrage du serveur HTTP sur {host}:{port}")
+    print(f"Serveur HTTP démarré sur {host}:{port}")
     print(f"Document root: {CONFIG['document_root']}")
-    print(f"PHP activé: {CONFIG.get('enable_php', True)}")
+    print(f"PHP-CGI: {'activé' if CONFIG.get('enable_php', True) else 'désactivé'}")
+    
+    # Initialiser MySQL
+    try:
+        from handlers import database
+        await database.init_db()
+        print("MySQL: connecté")
+    except Exception as e:
+        print(f"MySQL: non disponible ({e})")
 
     server = await asyncio.start_server(handle_request, host, port)
 
@@ -491,6 +572,12 @@ async def main():
             await server.serve_forever()
         except KeyboardInterrupt:
             print("Arrêt du serveur...")
+            # Fermer la connexion DB proprement
+            try:
+                from handlers import database
+                await database.close_db()
+            except:
+                pass
 
 if __name__ == "__main__":
     asyncio.run(main())

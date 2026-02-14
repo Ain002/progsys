@@ -1,0 +1,5 @@
+<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" fill="#667eea" rx="10"/>
+  <circle cx="50" cy="50" r="25" fill="#764ba2"/>
+  <text x="50" y="60" font-size="35" fill="white" text-anchor="middle" font-weight="bold">✓</text>
+</svg>

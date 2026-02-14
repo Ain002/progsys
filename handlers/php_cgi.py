@@ -9,7 +9,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 async def execute_php_cgi(script_path: str, method: str, query_string: str,
-                         headers: Dict[str, str], body: str,
+                         headers: Dict[str, str], body: bytes,
                          php_cgi_path: str = "/usr/bin/php-cgi") -> Tuple[bytes, Optional[Dict[str, str]]]:
     """
     Exécute un script PHP via CGI.
@@ -19,7 +19,7 @@ async def execute_php_cgi(script_path: str, method: str, query_string: str,
         method: Méthode HTTP (GET, POST, etc.)
         query_string: Query string (?param=value)
         headers: Headers HTTP
-        body: Corps de la requête
+        body: Corps de la requête (bytes)
         php_cgi_path: Chemin vers php-cgi
 
     Returns:
@@ -29,8 +29,8 @@ async def execute_php_cgi(script_path: str, method: str, query_string: str,
         # Construire les variables d'environnement CGI
         env = build_cgi_env(script_path, method, query_string, headers, body)
 
-        # Préparer les données POST
-        input_data = body.encode('utf-8') if method == 'POST' and body else None
+        # Préparer les données POST (body est déjà en bytes)
+        input_data = body if method == 'POST' and body else None
 
         # Lancer php-cgi
         process = await asyncio.create_subprocess_exec(
@@ -60,7 +60,7 @@ async def execute_php_cgi(script_path: str, method: str, query_string: str,
         return b'', None
 
 def build_cgi_env(script_path: str, method: str, query_string: str,
-                 headers: Dict[str, str], body: str) -> Dict[str, str]:
+                 headers: Dict[str, str], body: bytes) -> Dict[str, str]:
     """
     Construit l'environnement CGI pour PHP.
 
@@ -69,7 +69,7 @@ def build_cgi_env(script_path: str, method: str, query_string: str,
         method: Méthode HTTP
         query_string: Query string
         headers: Headers HTTP
-        body: Corps de la requête
+        body: Corps de la requête (bytes)
 
     Returns:
         Dict: Variables d'environnement
@@ -131,7 +131,7 @@ def parse_cgi_output(output: bytes) -> Tuple[bytes, Optional[Dict[str, str]]]:
             if ': ' in line:
                 key, value = line.split(': ', 1)
                 headers[key.lower()] = value
-
+        
         return body.encode('utf-8'), headers
 
     except Exception as e:

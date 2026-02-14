@@ -84,10 +84,8 @@ class LRUCache:
             # Déplacer à la fin (plus récemment utilisé)
             self.cache.move_to_end(key)
             self.hits += 1
-            print(f"✅ CACHE HIT: {key}")
             return self.cache[key]
         self.misses += 1
-        print(f"❌ CACHE MISS: {key}")
         return None
 
     def put(self, key: str, value: Any) -> None:
@@ -101,14 +99,10 @@ class LRUCache:
         if key in self.cache:
             # Déplacer à la fin
             self.cache.move_to_end(key)
-            print(f"🔄 CACHE UPDATE: {key}")
         else:
-            # Nouveau élément
+            # Nouveau élément - évincer le moins récemment utilisé si nécessaire
             if len(self.cache) >= self.capacity:
-                # Évincer le moins récemment utilisé
-                evicted = self.cache.popitem(last=False)
-                print(f"🗑️  CACHE EVICTION: {evicted[0]} (capacité atteinte)")
-            print(f"💾 CACHE ADD: {key} (taille: {len(self.cache) + 1}/{self.capacity})")
+                self.cache.popitem(last=False)
 
         self.cache[key] = value
 
